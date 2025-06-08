@@ -1,0 +1,45 @@
+# --- Ambiente Virtual ---
+# Ignora a pasta do ambiente virtual para não enviar pacotes de terceiros.
+venv/
+.venv/
+
+# --- Cache e Arquivos Compilados do Python ---
+# Ignora as pastas de cache que o Python cria automaticamente.
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# --- Arquivos de Configuração e Segredos ---
+# IMPORTANTE: Ignora o arquivo .env que contém suas senhas e chaves de API.
+# O caminho é relativo à raiz do projeto.
+config/.env
+
+# Ignora o arquivo de segredo do Google, caso esteja na pasta config.
+config/client_secret_*.json
+
+# --- Pasta de Saída (Arquivos Gerados) ---
+# Ignora a pasta 'output' e todo o seu conteúdo.
+# Dados gerados não devem ser versionados.
+output/
+
+# Ignora qualquer arquivo .xlsx diretamente, como backup.
+*.xlsx
+
+# --- Arquivos de IDEs e Editores Comuns ---
+# Ignora pastas de configuração de editores como VS Code e PyCharm.
+.vscode/
+.idea/
+
+# --- Arquivos Temporários do Sistema Operacional ---
+# Ignora arquivos de sistema do macOS, Windows e Linux.
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Arquivos Temporários de Planilhas ---
+# Ignora os arquivos de "lock" que o Excel/LibreOffice cria quando um arquivo está aberto.
+.~*.xlsx
+
+*.env
+*.json
