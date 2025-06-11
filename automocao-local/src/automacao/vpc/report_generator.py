@@ -1,37 +1,31 @@
 import pandas as pd
 import logging
-import io
-from openpyxl import load_workbook
-from ..utils import formatters
+import json
+import os
 
-def create_report(data_frames: dict, security_findings_df: pd.DataFrame):
+def create_report_from_json(input_json_path: str, output_excel_path: str):
     """
-    Cria um relatório em memória para o serviço VPC, incluindo todas as abas de recursos e mapeamentos.
+    Lê os dados brutos de um arquivo JSON e gera a planilha Excel base
+    com todas as abas.
     """
-    logging.info("Formatando dados de texto e criando estrutura do relatório em memória...")
-    
-    # Adiciona a aba de análise de segurança ao pacote de dados
-    data_frames['Security_Analysis'] = security_findings_df
+    logging.info(f"Lendo dados brutos do arquivo JSON: {input_json_path}")
+    try:
+        with open(input_json_path, 'r', encoding='utf-8') as f:
+            raw_data = json.load(f)
+    except FileNotFoundError:
+        logging.error(f"Arquivo de entrada JSON não encontrado: {input_json_path}")
+        raise
 
-    # Aplica formatadores de texto (se necessário)
-    for sheet_name, df in data_frames.items():
-        if df.empty: continue
-        for col in df.columns:
-            if 'Tags' in col: df[col] = df[col].apply(formatters.format_tags)
+    data_frames = {key: pd.DataFrame(value) for key, value in raw_data.items()}
+
+    os.makedirs(os.path.dirname(output_excel_path), exist_ok=True)
+    logging.info(f"Gerando relatório Excel base em: {output_excel_path}")
     
-    # Gera o workbook em memória
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        # Define a ordem final das abas
-        sheet_order = [
-            'Security_Analysis', 'VPCs', 'Subnets', 'SecurityGroups', 
-            'RouteTables', 'NetworkACLs', 'InternetGateways',
-            'MAP_VPC_x_SG', 'MAP_Subnet_x_RT'
-        ]
+    with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
+        # Ordem definida das abas para melhor organização
+        sheet_order = ['VPCs', 'Subnets', 'SecurityGroups', 'RouteTables', 'NetworkACLs', 'InternetGateways']
         for sheet_name in sheet_order:
             if sheet_name in data_frames and not data_frames[sheet_name].empty:
                 data_frames[sheet_name].to_excel(writer, sheet_name=sheet_name, index=False)
-
-    workbook = load_workbook(buffer)
-    logging.info("Relatório bruto em memória gerado com sucesso.")
-    return workbook
+    
+    logging.info("Relatório Excel base gerado com sucesso.")
