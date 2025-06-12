@@ -1,45 +1,53 @@
 import pandas as pd
 import logging
-import json
-import os
+import io
+from openpyxl import load_workbook
 from ..utils import formatters
 
-def create_report_from_json(input_json_path: str, output_excel_path: str):
+def create_report(data_frames: dict, security_findings_df: pd.DataFrame):
     """
-    Lê os dados brutos de um arquivo JSON, formata o texto e gera a
-    planilha Excel base, salvando-a no caminho de saída.
+    Cria um relatório em memória, formatando os dados de texto e incluindo a 
+    aba de análise de segurança. Retorna o objeto workbook do openpyxl.
     """
-    logging.info(f"Lendo dados brutos do arquivo JSON: {os.path.basename(input_json_path)}")
-    try:
-        with open(input_json_path, 'r', encoding='utf-8') as f:
-            raw_data = json.load(f)
-    except FileNotFoundError:
-        logging.error(f"Arquivo de entrada JSON não encontrado: {input_json_path}")
-        raise
-
-    # Converte os dados de volta para DataFrames
-    data_frames = {key: pd.DataFrame(value) for key, value in raw_data.items()}
-
-    # Aplica formatadores de texto para melhorar a legibilidade
-    logging.info("Formatando texto das células para o relatório...")
-    for sheet_name, df in data_frames.items():
-        if df.empty: continue
-        for col in df.columns:
-            if 'Tags' in col: df[col] = df[col].apply(formatters.format_tags)
-
-    # Garante que o diretório de saída exista
-    os.makedirs(os.path.dirname(output_excel_path), exist_ok=True)
+    logging.info("Formatando texto e criando estrutura do relatório em memória...")
     
-    logging.info(f"Gerando relatório Excel base em: {os.path.basename(output_excel_path)}")
-    with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
+    # Adiciona a aba de análise de segurança ao pacote de dados para ser escrita
+    data_frames['Security_Analysis'] = security_findings_df
+
+    # Aplica formatadores de texto para melhorar a legibilidade ANTES de escrever no Excel
+    if 'VPCs' in data_frames and not data_frames['VPCs'].empty:
+        df = data_frames['VPCs']
+        if 'Tags' in df.columns: df['Tags'] = df['Tags'].apply(formatters.format_tags)
+    
+    if 'SecurityGroups' in data_frames and not data_frames['SecurityGroups'].empty:
+        df = data_frames['SecurityGroups']
+        # Usamos uma cópia para a formatação de texto, pois a análise precisa dos dados brutos
+        df_formatted = df.copy()
+        if 'IpPermissions' in df.columns: df_formatted['IpPermissions'] = df_formatted['IpPermissions'].apply(formatters.format_rules)
+        if 'IpPermissionsEgress' in df.columns: df_formatted['IpPermissionsEgress'] = df_formatted['IpPermissionsEgress'].apply(formatters.format_rules)
+        data_frames['SecurityGroups_Formatted'] = df_formatted # Usaremos esta para a aba principal
+
+    if 'RouteTables' in data_frames and not data_frames['RouteTables'].empty:
+        df = data_frames['RouteTables']
+        if 'Associations' in df.columns: df['Associations'] = df['Associations'].apply(formatters.format_associations)
+        if 'Routes' in df.columns: df['Routes'] = df['Routes'].apply(formatters.format_routes)
+        
+    # Gera o workbook em memória
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
         # Ordem definida das abas para melhor organização
         sheet_order = [
-            'VPCs', 'Subnets', 'SecurityGroups', 
+            'Security_Analysis', 'VPCs', 'Subnets', 'SecurityGroups_Formatted', 
             'RouteTables', 'NetworkACLs', 'InternetGateways'
-            # Adicione aqui outras abas principais se o coletor as gerar
         ]
+        
         for sheet_name in sheet_order:
-            if sheet_name in data_frames and not data_frames[sheet_name].empty:
-                data_frames[sheet_name].to_excel(writer, sheet_name=sheet_name, index=False)
+            df_key = sheet_name.replace('_Formatted', '') # Acha o DataFrame original
+            if df_key in data_frames and not data_frames[df_key].empty:
+                # Usa o DataFrame formatado se existir, senão o original
+                df_to_write = data_frames.get(sheet_name, data_frames[df_key])
+                df_to_write.to_excel(writer, sheet_name=sheet_name.replace('_Formatted', ''), index=False)
 
-    logging.info("Relatório Excel base gerado com sucesso.")
+    workbook = load_workbook(buffer)
+    logging.info("Relatório base em memória gerado com sucesso.")
+    return workbook
