@@ -7,84 +7,40 @@ from collections import defaultdict
 from ..utils.config import get_config
 
 # --- FUNÇÕES AUXILIARES DE NORMALIZAÇÃO ---
+# Funções que transformam os dados brutos em tabelas limpas
 
 def _normalize_sgs(sgs_raw_data):
-    """ 'Explode' as regras de Security Groups em múltiplas linhas (uma por regra/origem). """
-    logging.info("Normalizando dados de Security Groups...")
+    """ 'Explode' as regras de Security Groups em múltiplas linhas. """
     sg_rules_list = []
-    if not sgs_raw_data:
-        return pd.DataFrame()
-
+    if not sgs_raw_data: return pd.DataFrame()
     for sg in sgs_raw_data:
-        # Garante que SGs sem regras ainda apareçam no resultado para análise
+        # Garante que mesmo SGs sem regras apareçam no resultado
         if not sg.get('IpPermissions') and not sg.get('IpPermissionsEgress'):
-             sg_rules_list.append({
-                 'GroupId': sg.get('GroupId'), 'GroupName': sg.get('GroupName'), 'VpcId': sg.get('VpcId'), 
-                 'Region': sg.get('Region'), 'Direction': 'Inbound', 'Protocol': 'N/A', 'FromPort': None, 
-                 'ToPort': None, 'SourceDest': 'Nenhuma regra definida', 'Description': sg.get('Description','')
-                })
+             sg_rules_list.append({'GroupId': sg['GroupId'], 'GroupName': sg['GroupName'], 'VpcId': sg.get('VpcId'), 'Region': sg.get('Region'), 'Direction': 'Inbound', 'Protocol': 'N/A', 'FromPort': None, 'ToPort': None, 'SourceDest': 'Nenhuma regra definida', 'Description': sg.get('Description','')})
              continue
-        
-        # Processa regras de entrada e saída
         for rule_type, permissions in [('Inbound', sg.get('IpPermissions', [])), ('Outbound', sg.get('IpPermissionsEgress', []))]:
             for rule in permissions:
                 protocol = str(rule.get('IpProtocol', '-1')).upper().replace('-1', 'All')
                 from_port, to_port = rule.get('FromPort'), rule.get('ToPort')
-                
-                # Combina todas as fontes de tráfego em uma única lista
-                sources = []
-                sources.extend([(ip.get('CidrIp'), ip.get('Description', '')) for ip in rule.get('IpRanges', [])])
-                sources.extend([(ip.get('CidrIpv6'), ip.get('Description', '')) for ip in rule.get('Ipv6Ranges', [])])
-                sources.extend([(group.get('GroupId'), group.get('Description', '')) for group in rule.get('UserIdGroupPairs', [])])
-                
-                if not sources: sources.append(('N/A', '')) # Garante que regras sem fonte ainda apareçam
-
+                sources = [(ip.get('CidrIp'), ip.get('Description', '')) for ip in rule.get('IpRanges', [])] + \
+                          [(group.get('GroupId'), group.get('Description', '')) for group in rule.get('UserIdGroupPairs', [])]
+                if not sources: sources.append(('N/A', ''))
                 for source, desc in sources:
-                    sg_rules_list.append({
-                        'GroupId': sg['GroupId'], 'GroupName': sg['GroupName'], 'VpcId': sg.get('VpcId'), 
-                        'Region': sg.get('Region'), 'Direction': rule_type, 'Protocol': protocol, 
-                        'FromPort': from_port, 'ToPort': to_port, 'SourceDest': source, 'Description': desc
-                    })
+                    sg_rules_list.append({'GroupId': sg['GroupId'], 'GroupName': sg['GroupName'], 'VpcId': sg.get('VpcId'), 'Region': sg.get('Region'), 'Direction': rule_type, 'Protocol': protocol, 'FromPort': from_port, 'ToPort': to_port, 'SourceDest': source, 'Description': desc})
     return pd.DataFrame(sg_rules_list)
 
 def _normalize_rts(rts_raw_data):
     """ 'Explode' as rotas de Route Tables em múltiplas linhas. """
-    logging.info("Normalizando dados de Route Tables...")
     routes_list = []
     if not rts_raw_data: return pd.DataFrame()
-
     for rt in rts_raw_data:
         for route in rt.get('Routes', []):
             routes_list.append({
                 'RouteTableId': rt['RouteTableId'], 'VpcId': rt.get('VpcId'), 'Region': rt.get('Region'),
                 'Destination': route.get('DestinationCidrBlock', route.get('DestinationIpv6CidrBlock', 'N/A')),
-                'Target': route.get('GatewayId', route.get('NatGatewayId', route.get('TransitGatewayId', route.get('InstanceId', 'N/A')))),
-                'State': route.get('State'), 'Origin': route.get('Origin')
+                'Target': route.get('GatewayId', route.get('NatGatewayId', 'N/A')), 'State': route.get('State')
             })
     return pd.DataFrame(routes_list)
-
-def _normalize_nacls(nacls_raw_data):
-    """ 'Explode' as entradas de Network ACLs em múltiplas linhas. """
-    logging.info("Normalizando dados de Network ACLs...")
-    entries_list = []
-    if not nacls_raw_data: return pd.DataFrame()
-
-    for nacl in nacls_raw_data:
-        for entry in nacl.get('Entries', []):
-            if entry.get('RuleNumber') == 32767: continue # Pula a regra padrão implícita de DENY ALL
-            port_range = entry.get('PortRange')
-            ports = "N/A"
-            if port_range:
-                from_port, to_port = port_range.get('From', 'All'), port_range.get('To', '')
-                ports = f"{from_port}-{to_port}" if to_port and from_port != to_port else f"{from_port}"
-            entries_list.append({
-                'NetworkAclId': nacl['NetworkAclId'], 'VpcId': nacl.get('VpcId'), 'IsDefault': nacl.get('IsDefault'), 'Region': nacl.get('Region'),
-                'RuleNumber': entry.get('RuleNumber'), 'Direction': 'Outbound' if entry.get('Egress') else 'Inbound',
-                'Action': entry.get('RuleAction'), 'Protocol': str(entry.get('Protocol', '-1')).upper().replace('-1', 'All'),
-                'PortRange': ports, 'CidrBlock': entry.get('CidrBlock', entry.get('Ipv6CidrBlock', 'N/A'))
-            })
-    return pd.DataFrame(entries_list)
-
 
 # --- FUNÇÃO PRINCIPAL DE COLETA ---
 
@@ -95,35 +51,32 @@ def collect_data(regions_to_scan: list):
         logging.info(f"Coletando dados da região: {region}...")
         try:
             client = boto3.client('ec2', region_name=region)
-            # Dicionário para simplificar as chamadas de API e o nome da chave de resposta
+            # Lista de recursos para buscar
             resources_to_fetch = {
-                "Vpcs": "describe_vpcs", "Subnets": "describe_subnets", "InternetGateways": "describe_internet_gateways",
-                "SecurityGroups": "describe_security_groups", "RouteTables": "describe_route_tables", "NetworkAcls": "describe_network_acls"
+                "vpcs": client.describe_vpcs().get('Vpcs', []),
+                "subnets": client.describe_subnets().get('Subnets', []),
+                "igws": client.describe_internet_gateways().get('InternetGateways', []),
+                "sgs_raw": client.describe_security_groups().get('SecurityGroups', []),
+                "rts_raw": client.describe_route_tables().get('RouteTables', [])
             }
-            for key, method_name in resources_to_fetch.items():
-                response = getattr(client, method_name)()
-                data = response.get(key, [])
+            for key, data in resources_to_fetch.items():
                 for item in data:
                     item['Region'] = region
-                all_data_raw[key.lower()].extend(data)
+                all_data_raw[key].extend(data)
         except Exception as e:
             logging.warning(f"Falha ao coletar dados da região {region}: {e}")
             continue
 
     logging.info("Normalizando dados agregados...")
+    df_sgs = _normalize_sgs(all_data_raw['sgs_raw'])
+    df_rts = _normalize_rts(all_data_raw['rts_raw'])
     
-    df_sgs = _normalize_sgs(all_data_raw['securitygroups'])
-    df_rts = _normalize_rts(all_data_raw['routetables'])
-    df_nacls = _normalize_nacls(all_data_raw['networkacls'])
-    
-    # Cria o pacote de dados final com os DataFrames prontos
     data_pack = {
         'VPCs': pd.json_normalize(all_data_raw['vpcs']),
         'Subnets': pd.json_normalize(all_data_raw['subnets']),
         'SecurityGroups': df_sgs,
         'RouteTables': df_rts,
-        'NetworkACLs': df_nacls,
-        'InternetGateways': pd.json_normalize(all_data_raw['internetgateways']),
+        'InternetGateways': pd.json_normalize(all_data_raw['igws']),
     }
     return data_pack
 
