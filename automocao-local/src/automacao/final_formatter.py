@@ -8,12 +8,12 @@ from openpyxl.utils import get_column_letter
 LINKING_CONFIG = {
     'Subnets': {
         'VpcId': 'VPCs',
-        'AssociatedRouteTable': 'RouteTables',
-        'AssociatedNetworkACL': 'NetworkACLs'
+        'RouteTableId': 'RouteTables',
+        'NetworkAclId': 'NetworkACLs'
     },
     'SecurityGroups': {
         'VpcId': 'VPCs',
-        'SourceDest': 'SecurityGroups' # Para regras que apontam para outro SG
+        'SourceDest': 'SecurityGroups' # Linka para outros SGs na mesma aba
     },
     'RouteTables': {
         'VpcId': 'VPCs',
@@ -38,16 +38,16 @@ GREEN_FONT = Font(color="006100", bold=True)
 
 def apply_final_formatting(workbook, sg_risk_map: dict):
     """
-    Recebe um objeto de workbook e o mapa de riscos, e aplica toda a formatação final:
-    cores, hyperlinks, alinhamento e ajuste de colunas.
+    Recebe um objeto de workbook e o mapa de riscos, e aplica toda a formatação final.
     """
-    logging.info("Aplicando formatação final completa (cores, links globais, layout)...")
+    logging.info("Aplicando formatação final completa (cores de linha, links, layout)...")
     
     # --- ETAPA 1: CRIAÇÃO DOS MAPAS DE IDS PARA OS LINKS ---
     id_maps = {}
     for sheet in workbook:
-        # A convenção é que a primeira coluna (A) de cada aba contém o ID principal do recurso
+        # A convenção é que a primeira coluna (A) de cada aba contém o ID principal
         if sheet.max_row > 1:
+            # Constrói o mapa: 'sg-12345' -> 5 (linha 5)
             id_maps[sheet.title] = {str(cell.value): cell.row for cell in sheet['A'] if cell.value is not None}
 
     # --- ETAPA 2: APLICAÇÃO DOS HYPERLINKS ---
@@ -63,21 +63,19 @@ def apply_final_formatting(workbook, sg_risk_map: dict):
                         
                         for row_num in range(2, sheet.max_row + 1):
                             cell = sheet.cell(row=row_num, column=col_idx)
-                            if cell.value and isinstance(cell.value, str):
-                                link_id = cell.value.strip()
-                                if link_id in target_map:
-                                    target_row = target_map[link_id]
-                                    link_location = f"#'{target_sheet_name}'!A{target_row}"
-                                    cell.value = f'=HYPERLINK("{link_location}", "{cell.value}")'
-                                    cell.style = "Hyperlink"
+                            if cell.value and isinstance(cell.value, str) and cell.value in target_map:
+                                link_location = f"#'{target_sheet_name}'!A{target_map[cell.value]}"
+                                cell.value = f'=HYPERLINK("{link_location}", "{cell.value}")'
+                                cell.style = "Hyperlink"
             except (ValueError, IndexError):
                  logging.warning(f"Não foi possível processar links para a aba '{source_sheet_name}'.")
 
     # --- ETAPA 3: COLORAÇÃO DAS ABAS (SecurityGroups e Security_Analysis) ---
+    # Colore a aba de Análise de Segurança
     if 'Security_Analysis' in workbook.sheetnames:
         sheet = workbook['Security_Analysis']
         try:
-            risk_col_idx = [cell.value for cell in sheet[1]].index('Risco') + 1
+            risk_col_idx = [c.value for c in sheet[1]].index('Risco') + 1
             for row_cells in sheet.iter_rows(min_row=2, max_row=sheet.max_row):
                 risk_cell = row_cells[risk_col_idx - 1]
                 if risk_cell.value == 'Alto':
@@ -89,6 +87,7 @@ def apply_final_formatting(workbook, sg_risk_map: dict):
         except (ValueError, IndexError):
             logging.warning("Não foi possível formatar cores na aba de Análise de Segurança.")
 
+    # Colore as linhas da aba SecurityGroups
     if 'SecurityGroups' in workbook.sheetnames and sg_risk_map:
         sheet = workbook['SecurityGroups']
         try:
@@ -106,7 +105,8 @@ def apply_final_formatting(workbook, sg_risk_map: dict):
                     for cell in row_cells:
                         cell.fill = fill_style
         except ValueError:
-            logging.warning("Coluna 'GroupId' não encontrada na aba SecurityGroups para colorir.")
+            logging.warning("Coluna 'GroupId' não encontrada na aba SecurityGroups para colorir linhas.")
+
 
     # --- ETAPA 4: LAYOUT GERAL (AJUSTE DE COLUNAS E ALINHAMENTO) ---
     for sheet in workbook:
@@ -116,11 +116,16 @@ def apply_final_formatting(workbook, sg_risk_map: dict):
             for cell in col:
                 cell.alignment = Alignment(wrap_text=True, vertical='top', horizontal='left')
                 if cell.value and "HYPERLINK" not in str(cell.value):
-                    cell_max_line = max(len(line) for line in str(cell.value).split('\n'))
-                    if cell_max_line > max_length: max_length = cell_max_line
-            if max_length < 15: max_length = 15
+                    cell_max_line = max(len(line) for line in str(cell.value).split('\n')) if str(cell.value) else 0
+                    if cell_max_line > max_length:
+                        max_length = cell_max_line
+            
+            # Define uma largura mínima para melhor visualização
+            if max_length < 20:
+                max_length = 20
+                
             adjusted_width = (max_length + 2) * 1.1
-            sheet.column_dimensions[column_letter].width = min(adjusted_width, 80)
+            sheet.column_dimensions[column_letter].width = min(adjusted_width, 70) # Limita a largura máxima
 
     logging.info("Formatação final aplicada com sucesso.")
     return workbook
