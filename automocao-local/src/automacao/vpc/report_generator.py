@@ -2,42 +2,29 @@ import pandas as pd
 import logging
 import json
 import os
-import io
-from openpyxl import load_workbook
 from ..utils import formatters
 
-def create_report(data_frames: dict, security_findings_df: pd.DataFrame):
-    """
-    Cria um relatório em memória, formatando os dados de texto
-    e incluindo a aba de análise de segurança.
-    """
-    logging.info("Formatando texto e criando estrutura do relatório em memória...")
-    
-    # Adiciona a aba de análise de segurança ao pacote de dados para ser escrita
-    data_frames['Security_Analysis'] = security_findings_df
+def create_report_from_json(input_json_path: str, output_excel_path: str):
+    """Lê dados brutos do JSON, aplica formatação de texto e gera o Excel base."""
+    logging.info(f"Lendo dados do JSON: {os.path.basename(input_json_path)}")
+    try:
+        with open(input_json_path, 'r', encoding='utf-8') as f: raw_data = json.load(f)
+    except FileNotFoundError:
+        logging.error(f"Arquivo JSON não encontrado: {input_json_path}"); raise
 
-    # Aplica formatadores de texto para criar as células de resumo
+    data_frames = {key: pd.DataFrame(value) for key, value in raw_data.items()}
+
+    logging.info("Formatando texto das células para o relatório...")
     if 'SecurityGroups' in data_frames and not data_frames['SecurityGroups'].empty:
-        df_sg = data_frames['SecurityGroups']
-        # Cria uma cópia para a formatação, mantendo os dados brutos no DF original
-        df_sg_formatted = df_sg.copy()
-        # Renomeia as colunas para o nome final desejado na planilha
-        df_sg_formatted.rename(columns={'IpPermissions': 'Inbound Rules', 'IpPermissionsEgress': 'Outbound Rules'}, inplace=True, errors='ignore')
-        if 'Inbound Rules' in df_sg_formatted.columns:
-            df_sg_formatted['Inbound Rules'] = df_sg_formatted['Inbound Rules'].apply(formatters.format_rules)
-        if 'Outbound Rules' in df_sg_formatted.columns:
-            df_sg_formatted['Outbound Rules'] = df_sg_formatted['Outbound Rules'].apply(formatters.format_rules)
-        # Substitui o DataFrame no pacote com a versão formatada para escrita
-        data_frames['SecurityGroups'] = df_sg_formatted
+        df = data_frames['SecurityGroups']
+        df.rename(columns={'IpPermissions': 'Inbound Rules', 'IpPermissionsEgress': 'Outbound Rules'}, inplace=True)
+        df['Inbound Rules'] = df['Inbound Rules'].apply(formatters.format_rules)
+        df['Outbound Rules'] = df['Outbound Rules'].apply(formatters.format_rules)
     
-    # Gera o workbook em memória
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        sheet_order = ['Security_Analysis', 'VPCs', 'Subnets', 'SecurityGroups', 'RouteTables']
+    with pd.ExcelWriter(output_excel_path, engine='openpyxl') as writer:
+        sheet_order = ['VPCs', 'Subnets', 'SecurityGroups', 'RouteTables']
         for sheet_name in sheet_order:
             if sheet_name in data_frames and not data_frames[sheet_name].empty:
                 data_frames[sheet_name].to_excel(writer, sheet_name=sheet_name, index=False)
-
-    workbook = load_workbook(buffer)
-    logging.info("Relatório base em memória gerado com sucesso.")
-    return workbook
+    
+    logging.info(f"Relatório Excel base gerado: {os.path.basename(output_excel_path)}")
