@@ -2,24 +2,22 @@ import logging
 import os
 import re
 import importlib
-import pandas as pd
+import time
 import boto3
-from datetime import datetime, timedelta
-from collections import defaultdict
+import pandas as pd
+from datetime import datetime
+
 from src.automacao.utils.logger import setup_logging
 from src.automacao.utils.config import load_environment
 from src.automacao.utils.credentials import validate_aws_credentials
-from src.automacao.final_formatter import apply_final_formatting
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
-
 REPORTS = {
-    "1": {"name": "VPC e Recursos Associados", "module": "vpc", "scope": "regional"},
-    "2": {"name": "Instâncias EC2", "module": "ec2", "scope": "regional"},
-    "3": {"name": "IAM (Usuários e Grupos)", "module": "iam", "scope": "global"}
+    "1": {"name": "VPC e Recursos Associados", "module": "vpc"},
 }
 
 def display_menu():
+    """Mostra o menu de opções para o usuário."""
     print("\n+-------------------------------------------------------------+")
     print("|                MENU DE RELATÓRIOS AWS                     |")
     print("+-------------------------------------------------------------+")
@@ -39,30 +37,41 @@ def get_next_run_number(output_dir: str, report_prefix: str) -> int:
             if run_num > max_run_num: max_run_num = run_num
     return max_run_num + 1
 
-def get_active_regions(session):
-    logging.info("Consultando o AWS Cost Explorer para encontrar regiões ativas...")
-    try:
-        cost_explorer = session.client('ce', region_name='us-east-1')
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=30)
-        response = cost_explorer.get_cost_and_usage(
-            TimePeriod={'Start': start_date.strftime('%Y-%m-%d'), 'End': end_date.strftime('%Y-%m-%d')},
-            Granularity='MONTHLY', Metrics=['UnblendedCost'],
-            GroupBy=[{'Type': 'DIMENSION', 'Key': 'REGION'}]
-        )
-        active_regions = [group['Keys'][0] for group in response['ResultsByTime'][0]['Groups'] if float(group['Metrics']['UnblendedCost']['Amount']) > 0]
-        if active_regions:
-            logging.info(f"Regiões com custos encontradas: {active_regions}")
-            return active_regions
-    except Exception as e:
-        logging.error(f"Não foi possível buscar dados do Cost Explorer: {e}. Verifique a permissão 'ce:GetCostAndUsage'.")
+def find_active_vpc_regions(session):
+    """Varre todas as regiões para encontrar aquelas que têm VPCs em uso."""
+    logging.info("Iniciando varredura em todas as regiões para encontrar VPCs ativas...")
+    ec2_global = session.client('ec2', region_name='us-east-1')
+    all_regions = [region['RegionName'] for region in ec2_global.describe_regions(AllRegions=False)['Regions']]
     
-    logging.warning("Nenhuma região com custos encontrada ou falha na API. Verificando todas as regiões ativas como fallback.")
-    ec2 = session.client('ec2', region_name='us-east-1')
-    return [region['RegionName'] for region in ec2.describe_regions(AllRegions=False)['Regions']]
+    active_regions = []
+    for region_name in all_regions:
+        logging.info(f"Sondando região: {region_name}...")
+        try:
+            ec2_regional = session.client('ec2', region_name=region_name)
+            vpcs = ec2_regional.describe_vpcs().get('Vpcs', [])
+            
+            if not vpcs: continue
+
+            if len(vpcs) > 1 or not vpcs[0].get('IsDefault', False):
+                logging.info(f"-> Região ATIVA encontrada (VPC customizada): {region_name}")
+                active_regions.append(region_name)
+                continue
+            
+            instances = ec2_regional.describe_instances(Filters=[{'Name': 'vpc-id', 'Values': [vpcs[0]['VpcId']]}]).get('Reservations', [])
+            if instances:
+                logging.info(f"-> Região ATIVA encontrada (recursos na VPC Padrão): {region_name}")
+                active_regions.append(region_name)
+        except Exception as e:
+            logging.warning(f"Não foi possível sondar a região {region_name}. Erro: {e}.")
+            
+    if not active_regions:
+        logging.warning("Nenhuma região com VPCs ativas foi encontrada.")
+    else:
+        logging.info(f"Análise concluída. Regiões com VPCs em uso: {active_regions}")
+        
+    return active_regions
 
 def main():
-    """Função principal que orquestra a automação interativa."""
     setup_logging()
     load_environment()
     if not validate_aws_credentials(): return
@@ -70,11 +79,7 @@ def main():
     while True:
         display_menu()
         choice = input("Por favor, escolha uma opção e pressione Enter: ").strip()
-
-        if choice.lower() == 'q':
-            logging.info("Encerrando o programa. Até mais!")
-            break
-
+        if choice.lower() == 'q': break
         if choice in REPORTS:
             report_config = REPORTS[choice]
             module_name = report_config["module"]
@@ -82,51 +87,47 @@ def main():
             output_dir = os.path.join(PROJECT_ROOT, "output", module_name)
             run_number = get_next_run_number(output_dir, f"RELATORIO_FINAL_{module_name.upper()}")
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            base_filename = f"{module_name}_{run_number}_{timestamp}"
             
-            path_final_excel = os.path.join(output_dir, f"RELATORIO_FINAL_{module_name.upper()}_{run_number}_{timestamp}.xlsx")
+            path_raw_json = os.path.join(output_dir, f"1_dados_brutos_{base_filename}.json")
+            path_base_excel = os.path.join(output_dir, f"2_relatorio_base_{base_filename}.xlsx")
+            path_analyzed = os.path.join(output_dir, f"3_relatorio_analisado_{base_filename}.xlsx")
+            path_final = os.path.join(output_dir, f"RELATORIO_FINAL_{module_name.upper()}_{run_number}_{timestamp}.xlsx")
 
             logging.info(f"Gerando Relatório: '{report_config['name']}' (Execução #{run_number})")
             
             try:
-                # --- INÍCIO DO PIPELINE EM MEMÓRIA ---
+                regions_to_scan = find_active_vpc_regions(boto3.Session())
+                if not regions_to_scan:
+                    logging.info("Nenhuma região ativa para escanear. Encerrando a execução.")
+                    break
+                
                 collector = importlib.import_module(f"src.automacao.{module_name}.collector")
                 report_generator = importlib.import_module(f"src.automacao.{module_name}.report_generator")
                 security_analyzer = importlib.import_module("src.automacao.security_analyzer")
+                final_formatter = importlib.import_module("src.automacao.final_formatter")
+                
+                logging.info("--- ETAPA 1: Coleta de Dados e Salvamento em JSON ---")
+                collector.collect_and_save_as_json(output_path=path_raw_json, regions_to_scan=regions_to_scan)
+                time.sleep(1)
 
-                # ETAPA 1: COLETA DOS DADOS BRUTOS
-                regions_to_scan = []
-                if report_config["scope"] == "regional":
-                    regions_to_scan = get_active_regions(boto3.Session())
-                logging.info("ETAPA 1: Coletando dados da AWS...")
-                data_pack = collector.collect_data(regions_to_scan=regions_to_scan)
+                logging.info("--- ETAPA 2: Geração do Relatório Excel Base ---")
+                report_generator.create_report_from_json(input_json_path=path_raw_json, output_excel_path=path_base_excel)
+                time.sleep(1)
                 
-                # ETAPA 2: ANÁLISE DE SEGURANÇA
-                findings_df, sg_risk_map = pd.DataFrame(), {}
-                if module_name == 'vpc':
-                    logging.info("ETAPA 2: Analisando riscos de segurança...")
-                    findings_df, sg_risk_map = security_analyzer.analyze_sgs(data_pack.get('SecurityGroups', pd.DataFrame()))
-                
-                # ETAPA 3: GERAÇÃO DO RELATÓRIO EM MEMÓRIA
-                logging.info("ETAPA 3: Gerando estrutura do relatório...")
-                workbook = report_generator.create_report(data_frames=data_pack, security_findings_df=findings_df)
-                
-                # ETAPA 4: FORMATAÇÃO FINAL
-                logging.info("ETAPA 4: Aplicando formatação final (cores, links, layout)...")
-                workbook = apply_final_formatting(workbook=workbook, sg_risk_map=sg_risk_map)
+                logging.info("--- ETAPA 3: Análise de Segurança ---")
+                sg_risk_map = security_analyzer.analyze_and_update_report(input_path=path_base_excel, output_path=path_analyzed, json_path=path_raw_json)
+                time.sleep(1)
 
-                # ETAPA FINAL: SALVAR NO DISCO
-                logging.info(f"Salvando relatório final em: {os.path.basename(path_final_excel)}")
-                os.makedirs(os.path.dirname(path_final_excel), exist_ok=True)
-                workbook.save(path_final_excel)
+                logging.info("--- ETAPA 4: Formatação Final ---")
+                final_formatter.apply_final_formatting(input_path=path_analyzed, output_path=path_final, sg_risk_map=sg_risk_map)
                 
-                logging.info(f"SUCESSO! Relatório final salvo em: {path_final_excel}")
-
+                logging.info(f"SUCESSO! Relatório final salvo em: {path_final}")
             except Exception as e:
-                logging.critical(f"A automação foi interrompida por um erro: {e}", exc_info=True)
-            
+                logging.critical(f"A automação foi interrompida: {e}", exc_info=True)
             break
         else:
-            print("\nOpção inválida! Por favor, escolha um número do menu.")
+            print("\nOpção inválida!")
 
 if __name__ == "__main__":
     main()
