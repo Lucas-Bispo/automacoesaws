@@ -51,3 +51,21 @@ def format_routes(routes_list):
     if not isinstance(routes_list, list) or not routes_list:
         return "Nenhuma"
     return "\n".join([f"Dest: {r.get('DestinationCidrBlock', r.get('DestinationIpv6CidrBlock', 'N/A'))} -> Target: {r.get('GatewayId', r.get('NatGatewayId', 'N/A'))}" for r in routes_list])
+
+# Formata a lista de blocos CIDR associados a uma VPC
+def format_cidr_associations(association_list):
+    """Formata a lista de blocos CIDR associados a uma VPC."""
+    # Retorna N/A se a célula estiver vazia ou não for uma lista
+    if not isinstance(association_list, list) or not association_list:
+        return "N/A"
+    
+    formatted_lines = []
+    # Itera por cada dicionário na lista
+    for assoc in association_list:
+        cidr_block = assoc.get('CidrBlock', 'N/A')
+        state = assoc.get('CidrBlockState', {}).get('State', 'N/A')
+        # Monta uma linha de texto legível
+        formatted_lines.append(f"{cidr_block} (State: {state})")
+        
+    # Junta todas as linhas com uma quebra de linha
+    return "\n".join(formatted_lines)

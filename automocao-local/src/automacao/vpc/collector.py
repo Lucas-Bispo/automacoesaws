@@ -14,8 +14,9 @@ def collect_data(regions_to_scan: list):
     all_data_raw = defaultdict(list)
     session = boto3.Session()
 
+    print("Coletando dados de rede de todas as regiões...")
     for region in regions_to_scan:
-        logging.info(f"Coletando dados da região: {region}...")
+        print(f"Iniciando coleta de dados da região: {region}...")
         try:
             client = session.client('ec2', region_name=region)
             # Lista de recursos que vamos buscar
@@ -31,13 +32,15 @@ def collect_data(regions_to_scan: list):
                     for item in data:
                         item['Region'] = region
                     all_data_raw[key].extend(data)
+                    print(f"Adicionado {len(data)} {key} da região {region} ao pacote de dados.")
         except Exception as e:
-            logging.warning(f"Falha ao coletar dados da região {region}: {e}")
+            print(f"Erro ao coletar dados da região {region}: {e}")
             continue
     
+    print("Coleta de dados brutos (sumarizados) concluída.")
     # Converte as listas de dicionários em DataFrames do Pandas
     data_pack = {key: pd.json_normalize(value) for key, value in all_data_raw.items()}
-    logging.info("Coleta de dados brutos (sumarizados) concluída.")
+    print("Conversão de dados brutos para DataFrames do Pandas concluída.")
     return data_pack
 
 def collect_and_save_as_json(output_path: str, regions_to_scan: list):
@@ -47,18 +50,22 @@ def collect_and_save_as_json(output_path: str, regions_to_scan: list):
     """
     # ETAPA 1.1: Coleta os dados
     data_pack_dfs = collect_data(regions_to_scan)
+    print("Coleta de dados brutos (sumarizados) concluída.")
     
     # ETAPA 1.2: Prepara os dados para salvar em JSON
     data_pack_to_save = {
         key: df.to_dict('records') for key, df in data_pack_dfs.items() if not df.empty
     }
+    print("Preparo dos dados para salvar em JSON concluído.")
     
     # ETAPA 1.3: Salva o arquivo JSON
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(data_pack_to_save, f, ensure_ascii=False, indent=4, default=str)
-        
-    logging.info(f"Dados brutos consolidados salvos em JSON: {os.path.basename(output_path)}")
+    print(f"Dados brutos consolidados salvos em JSON: {os.path.basename(output_path)}")
     
     # Retorna os DataFrames para a Etapa de Análise que acontece em memória no main.py
+    print("Retornando DataFrames para a Etapa de Análise...")
     return data_pack_dfs
+
+# limpar aquivos da memoria do json
