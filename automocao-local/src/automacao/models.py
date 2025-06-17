@@ -27,22 +27,24 @@ class Rule:
         return f"Protocol: {self.protocol}, Ports: {port_str}\n  Source/Dest: {', '.join(self.sources)}"
 
 class SecurityGroup:
-    """Representa um Security Group da AWS com suas regras."""
+    """
+    Representa um Security Group da AWS.
+    Esta classe guarda as informações essenciais de um SG e também os dados brutos
+    das regras para serem usados depois pela análise e formatação.
+    """
     def __init__(self, sg_data: dict):
         self.id = sg_data.get('GroupId')
         self.name = sg_data.get('GroupName')
         self.description = sg_data.get('Description')
         self.vpc_id = sg_data.get('VpcId')
         self.region = sg_data.get('Region')
-        self.tags = {tag['Key']: tag['Value'] for tag in sg_data.get('Tags', [])}
         
-        # Cria uma lista de objetos 'Rule' para entrada e saída
-        self.inbound_rules = [Rule(rule, 'Inbound') for rule in sg_data.get('IpPermissions', [])]
-        self.outbound_rules = [Rule(rule, 'Outbound') for rule in sg_data.get('IpPermissionsEgress', [])]
-
-        # Atributos que serão preenchidos pela análise de segurança
-        self.risk_level = "Seguro"
-        self.risk_findings = []
+        # --- A LINHA DA CORREÇÃO ---
+        # Armazena os dados brutos completos para análise posterior
+        self.raw_rules = sg_data 
+        
+        # Este atributo será preenchido depois pela análise de segurança
+        self.risk_level = "Seguro"  
 
     def get_formatted_inbound_rules(self):
         """Retorna todas as regras de entrada como um único texto formatado."""
@@ -66,15 +68,16 @@ class Subnet:
         self.region = subnet_data.get('Region')
 
 class VPC:
-    """Representa uma VPC da AWS e contém seus recursos associados."""
+    """
+    Representa uma VPC da AWS e conterá a lista de seus
+    recursos associados, como Security Groups.
+    """
     def __init__(self, vpc_data: dict):
         self.id = vpc_data.get('VpcId')
-        self.cidr_block = vpc_data.get('CidrBlock')
-        self.is_default = vpc_data.get('IsDefault', False)
+        # Tenta pegar a tag 'Name', se não houver, usa o próprio ID como nome
+        self.name = next((tag['Value'] for tag in vpc_data.get('Tags', []) if isinstance(vpc_data.get('Tags'), list) and tag.get('Key') == 'Name'), self.id)
         self.region = vpc_data.get('Region')
-        self.tags = {tag['Key']: tag['Value'] for tag in vpc_data.get('Tags', [])}
+        self.cidr_block = vpc_data.get('CidrBlock')
         
-        # Estas listas serão preenchidas pelo coletor
-        self.subnets = []
-        self.security_groups = []
-        self.route_tables = []
+        # Estas listas serão preenchidas pela nossa "fábrica"
+        self.security_groups: list[SecurityGroup] = []
