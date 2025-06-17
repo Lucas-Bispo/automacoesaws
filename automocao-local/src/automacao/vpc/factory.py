@@ -13,7 +13,7 @@ from ..security_analyzer import analyze_sgs
 
 class VPCReport:
     """Fábrica autônoma para criar o relatório completo de VPC em memória."""
-    
+
     def __init__(self, regions_to_scan: list):
         self.regions_to_scan = regions_to_scan
         # Atributos para armazenar os dados e resultados em memória
@@ -23,19 +23,22 @@ class VPCReport:
         logging.info(f"Fábrica de Relatório VPC iniciada para {len(self.regions_to_scan)} região(ões).")
 
     def collect_data(self):
-        """ETAPA 1: Coleta e hidrata todos os objetos de VPC e seus recursos."""
-        logging.info("Coletando e construindo o modelo de dados em memória...")
+        """ETAPA 1: Coleta dados brutos da AWS, cria e interliga os objetos em memória."""
+        logging.info("Iniciando coleta e construção do modelo de dados...")
         all_sgs_raw = []
         all_vpcs_raw = []
         session = boto3.Session()
+
         for region in self.regions_to_scan:
             logging.info(f"Coletando dados da região: {region}...")
             try:
                 client = session.client('ec2', region_name=region)
                 vpcs_data = client.describe_vpcs().get('Vpcs', [])
                 sgs_data = client.describe_security_groups().get('SecurityGroups', [])
+                
                 for item in vpcs_data: item['Region'] = region
                 for item in sgs_data: item['Region'] = region
+                
                 all_vpcs_raw.extend(vpcs_data)
                 all_sgs_raw.extend(sgs_data)
             except Exception as e:
@@ -51,50 +54,45 @@ class VPCReport:
             vpc.security_groups = sgs_by_vpc.get(vpc.id, [])
         
         self.vpcs = vpcs_obj
-        return self
+        logging.info(f"Modelo de dados com {len(self.vpcs)} VPCs construído.")
+        return self # Permite encadear chamadas: factory.collect_data().analyze_security()
 
     def analyze_security(self):
         """ETAPA 2: Analisa os SGs coletados e armazena os resultados internamente."""
         logging.info("Analisando riscos de segurança dos objetos...")
         all_sgs_objects = [sg for vpc in self.vpcs for sg in vpc.security_groups]
         
-        # Chama a função de análise pura que importamos
         self.findings_df, self.sg_risk_map = analyze_sgs(all_sgs_objects)
         
-        # Atualiza cada objeto SG com seu nível de risco para a coloração
         for sg in all_sgs_objects:
             sg.risk_level = self.sg_risk_map.get(sg.id, "Seguro")
+        
+        logging.info("Análise de segurança concluída.")
         return self
 
     def generate_report(self, output_path: str):
         """ETAPA 3 e 4: Gera a planilha final, formatada, com links e a salva no disco."""
         logging.info("Gerando e formatando relatório final...")
         
-        # Converte os objetos em listas de dicionários para criar os DataFrames
         data_frames = self._build_dataframes()
         
-        # Gera o workbook em memória
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             sheet_order = ['Security_Analysis', 'VPCs', 'SecurityGroups']
-            for sheet_name in sheet_order:
-                if sheet_name in data_frames and not data_frames[sheet_name].empty:
-                    df = data_frames[sheet_name]
-                    df.to_excel(writer, sheet_name=sheet_name.replace('_Formatted',''), index=False)
+            for sheet_name in data_frames.keys():
+                if sheet_name in sheet_order and not data_frames[sheet_name].empty:
+                    data_frames[sheet_name].to_excel(writer, sheet_name=sheet_name, index=False)
         
         workbook = load_workbook(buffer)
-        
-        # Aplica a formatação final de cores, links e layout
         workbook = self._apply_final_formatting(workbook)
 
-        # Salva o arquivo final no disco
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         workbook.save(output_path)
-        logging.info(f"Relatório final gerado e salvo com sucesso em: {os.path.basename(output_path)}")
+        logging.info(f"Relatório final gerado com sucesso em: {os.path.basename(output_path)}")
 
     def _build_dataframes(self):
         """Método privado para converter os objetos em DataFrames prontos para o Excel."""
-        vpcs_for_df = [{'VPC ID': v.id, 'VPC Name': v.name, 'Region': v.region, 'CIDR Block': v.cidr_block} for v in self.vpcs]
+        vpcs_for_df = [{'VpcId': v.id, 'VPC Name': v.name, 'Region': v.region} for v in self.vpcs]
         sgs_for_df = [
             {'GroupId': sg.id, 'GroupName': sg.name, 'VpcId': sg.vpc_id, 'Region': sg.region, 
              'Inbound Rules': formatters.format_rules(sg.raw_rules.get('IpPermissions', [])), 
@@ -116,7 +114,6 @@ class VPCReport:
         
         id_maps = {sheet.title: {str(cell.value): cell.row for cell in sheet['A'] if cell.value is not None} for sheet in workbook}
 
-        # Colore linhas na aba SecurityGroups
         if 'SecurityGroups' in workbook.sheetnames and self.sg_risk_map:
             sheet = workbook['SecurityGroups']
             try:
@@ -130,9 +127,7 @@ class VPCReport:
             except ValueError:
                 logging.warning("Coluna 'GroupId' não encontrada para colorir linhas.")
         
-        # Ajusta Layout Geral e Links
-        for sheet_name in workbook.sheetnames:
-            sheet = workbook[sheet_name]
+        for sheet in workbook:
             for col in sheet.columns:
                 max_length = 0
                 column_letter = get_column_letter(col[0].column)
@@ -142,4 +137,5 @@ class VPCReport:
                         max_length = max(max_length, max(len(line) for line in str(cell.value).split('\n')))
                 adjusted_width = (max_length + 2) * 1.2
                 sheet.column_dimensions[column_letter].width = min(adjusted_width, 70)
+
         return workbook
