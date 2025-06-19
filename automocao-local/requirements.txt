@@ -1,4 +1,21 @@
 # Para interagir com a API da AWS
+#boto3==1.34.120
+
+# Para manipulação de dados em formato de tabela (DataFrames)
+pandas==2.2.2
+
+# Para criar e manipular arquivos Excel (.xlsx) de forma avançada
+#openpyxl==3.1.3
+
+# Para carregar variáveis de ambiente do arquivo .env
+#python-dotenv==1.0.1
+
+# --- Opcional: Para integração com Google Sheets ---
+# Mantendo as dependências que tínhamos no início do projeto
+#google-api-python-client==2.135.0
+#google-auth-httplib2==0.2.0
+#google-auth-oauthlib==1.2.0
+# Para interagir com a API da AWS
 boto3==1.34.120
 
 # Para manipulação de dados em formato de tabela (DataFrames)
@@ -10,8 +27,5 @@ openpyxl==3.1.3
 # Para carregar variáveis de ambiente do arquivo .env
 python-dotenv==1.0.1
 
-# --- Opcional: Para integração com Google Sheets ---
-# Mantendo as dependências que tínhamos no início do projeto
-google-api-python-client==2.135.0
-google-auth-httplib2==0.2.0
-google-auth-oauthlib==1.2.0
+# Para monitoramento de performance (CPU, Memória)
+psutil==5.9.8

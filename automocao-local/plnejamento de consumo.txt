@@ -1,0 +1,67 @@
+Com certeza! Excelente ideia. Adicionar um "painel de monitoramento" em tempo real na tela do terminal é uma prática avançada que eleva a experiência de uso da nossa ferramenta.
+
+Você quer ver o consumo de recursos (CPU, Memória) e o tempo de execução sendo atualizados na tela enquanto a automação roda. Isso nos dá um feedback visual imediato sobre a performance do nosso código.
+
+### O Desafio e a Solução de Engenharia
+
+O desafio é que nosso script principal está ocupado fazendo o trabalho pesado (coletando dados, gerando planilhas). Para que ele consiga, **ao mesmo tempo**, mostrar um painel de performance que se atualiza, precisaremos usar um conceito de programação concorrente: **multithreading**.
+
+**O Plano de Ação (O "Blueprint"):**
+
+Vamos criar uma arquitetura onde teremos duas "pistas" de trabalho rodando em paralelo:
+
+1.  **Thread Principal (A Linha de Montagem)**: Esta é a thread que já temos. Ela continuará executando nosso pipeline de 4 etapas (Coleta, Geração, Análise, Formatação).
+
+2.  **Thread de Monitoramento (O "Painel de Controle")**: Criaremos uma nova thread que rodará em segundo plano. A única missão dela será:
+    * A cada segundo, verificar o uso atual de CPU e memória do nosso processo.
+    * Limpar a tela do terminal e redesenhar um "painel" com as informações atualizadas.
+    * Continuar fazendo isso até que a Thread Principal termine seu trabalho.
+
+Isso nos permite ter um acompanhamento visual dinâmico sem interferir na lógica principal da nossa automação.
+
+### Como a Implementação Funcionaria (Sem Código Ainda)
+
+1.  **Nova Dependência**: Para controlar a tela do terminal (limpar e redesenhar), a melhor ferramenta é a biblioteca `blessed`. Ela é leve e funciona bem em diferentes sistemas operacionais. Precisaríamos adicioná-la ao `requirements.txt`.
+
+2.  **Novo Módulo de UI (`src/automacao/utils/dashboard.py`)**: Para manter a organização, criaríamos um novo módulo especialista em interface de usuário no terminal.
+    * Ele conteria uma classe, digamos, `PerformanceDashboard`.
+    * Esta classe teria métodos para `start()` (iniciar a thread de monitoramento), `stop()` (parar a thread), e `update_display()` (a função que redesenha o painel na tela).
+
+3.  **Ajuste no `main.py`**: O nosso orquestrador faria o seguinte:
+    * Antes de iniciar o pipeline, ele criaria e iniciaria o nosso painel de controle:
+      ```python
+      # Em main.py (conceitual)
+      dashboard = PerformanceDashboard()
+      dashboard.start()
+      ```
+    * Em seguida, ele executaria todo o pipeline de 4 etapas como já faz.
+    * No final de tudo (dentro de um bloco `finally` para garantir que sempre aconteça), ele pararia o painel:
+      ```python
+      # Em main.py (conceitual)
+      try:
+          # ... executa todo o pipeline ...
+      finally:
+          dashboard.stop()
+          logging.info("Painel de monitoramento encerrado.")
+      ```
+
+### O Resultado Visual Esperado
+
+Quando você rodasse `python main.py`, seu terminal ficaria mais ou menos assim, atualizando a cada segundo enquanto o trabalho pesado acontece abaixo:
+
+```text
++-------------------------------------------------------------+
+|              MONITOR DE PERFORMANCE EM TEMPO REAL             |
++-------------------------------------------------------------+
+| 🕒 Tempo de Execução : 00:01:25                             |
+| 🧠 Uso de Memória    : 128.75 MB                              |
+| 💻 Uso de CPU        : 35.8%                                 |
++-------------------------------------------------------------+
+
+2025-06-16 12:00:50,123 - INFO - [collector.py:45] - Coletando dados da região: us-east-1...
+2025-06-16 12:01:15,456 - INFO - [report_generator.py:15] - Gerando relatório Excel base...
+```
+
+Esta abordagem é a melhor prática de engenharia para criar interfaces de terminal dinâmicas em aplicações de linha de comando. Ela é robusta, elegante e oferece exatamente o feedback visual que você pediu.
+
+Se você aprova este "blueprint", o próximo passo seria eu te fornecer o código para o novo módulo `dashboard.py` e os ajustes necessários no `main.py` e `requirements.txt`.
