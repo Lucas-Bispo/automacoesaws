@@ -95,3 +95,42 @@ def analyze_sgs(security_groups: list):
     logging.info(f"Análise de segurança concluída. {len(findings)} riscos individuais encontrados.")
     # Retorna o DataFrame com achados e o mapa de risco para cada Security Group
     return findings_df, sg_risk_map
+
+# ... (a função analyze_sgs e as constantes de risco para VPC permanecem aqui) ...
+
+def analyze_iam_users(users: list):
+    """
+    Analisa uma LISTA de objetos IAMUser e retorna findings e mapa de risco.
+    """
+    logging.info("Analisando objetos IAM User para riscos de segurança...")
+    findings = []
+    user_risk_map = {}
+    
+    from datetime import datetime, timezone
+    ADMIN_POLICY_ARN = "arn:aws:iam::aws:policy/AdministratorAccess"
+    KEY_MAX_AGE_DAYS = 90
+
+    for user in users:
+        highest_risk_level = 0
+
+        # Verificação 1: MFA está ativado?
+        if not user.mfa_enabled:
+            highest_risk_level = max(highest_risk_level, 2) # Alto Risco
+            findings.append({"Risco": "Alto", "Usuário": user.name, "Achado": "MFA não está ativado", "Recomendação": "Ative a Autenticação Multi-Fator."})
+        
+        # Verificação 2: Chaves de acesso antigas?
+        for key in user.access_keys:
+            if key.status == 'Active':
+                age = (datetime.now(timezone.utc) - key.create_date).days
+                if age > KEY_MAX_AGE_DAYS:
+                    highest_risk_level = max(highest_risk_level, 2) # Alto Risco
+                    findings.append({"Risco": "Alto", "Usuário": user.name, "Achado": f"Chave de Acesso ativa com {age} dias", "Recomendação": f"Rotacione a chave {key.id}."})
+        
+        # Mapeia o risco final para o usuário
+        if highest_risk_level == 2: user_risk_map[user.name] = "Alto"
+        elif highest_risk_level == 1: user_risk_map[user.name] = "Médio"
+        else: user_risk_map[user.name] = "Seguro"
+
+    findings_df = pd.DataFrame(findings) if findings else pd.DataFrame([{"Risco": "Parabéns!", "Usuário": "Nenhum risco comum detectado."}])
+    logging.info(f"Análise de IAM concluída. {len(findings)} riscos encontrados.")
+    return findings_df, user_risk_map

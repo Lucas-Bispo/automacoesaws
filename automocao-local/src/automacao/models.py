@@ -49,3 +49,29 @@ class VPC:
         
         # Inicializa uma lista vazia para armazenar os Security Groups associados a essa VPC
         self.security_groups: list[SecurityGroup] = []
+
+# Adicione estas classes ao final do seu arquivo models.py
+
+class IAMUser:
+    """Representa um usuário do serviço IAM da AWS."""
+    def __init__(self, user_data: dict):
+        self.id = user_data.get('UserId')
+        self.name = user_data.get('UserName')
+        self.arn = user_data.get('Arn')
+        self.create_date = user_data.get('CreateDate')
+        self.password_last_used = user_data.get('PasswordLastUsed', 'Nunca')
+        
+        # Atributos que serão preenchidos pela fábrica
+        self.groups = []
+        self.attached_policies = []
+        self.inline_policies = []
+        self.mfa_enabled = False
+        self.access_keys = []
+        self.risk_level = "Seguro"
+
+class AccessKey:
+    """Representa uma chave de acesso de um usuário IAM."""
+    def __init__(self, key_data: dict):
+        self.id = key_data.get('AccessKeyId')
+        self.status = key_data.get('Status')
+        self.create_date = key_data.get('CreateDate')
